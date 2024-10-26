@@ -1,0 +1,18 @@
+# Ignore node_modules
+node_modules
+/node_modules
+
+# Ignore logs
+*.log
+
+# Ignore environment files
+.env
+
+# Ignore build output
+dist
+
+# Ignore local configuration files
+*.local
+
+# Ignore any other files you don't want to include
+.DS_Store
