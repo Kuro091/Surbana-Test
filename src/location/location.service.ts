@@ -5,7 +5,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, QueryFailedError } from 'typeorm';
 import { Location } from './location.entity';
 import { CreateLocationDto } from './dto/create-location.dto';
 import { UpdateLocationDto } from './dto/update-location.dto';
@@ -17,6 +17,11 @@ interface LocationTreeNode {
   building: string;
   area: number;
   children: LocationTreeNode[];
+}
+
+interface PostgresError extends Error {
+  code: string;
+  message: string;
 }
 
 @Injectable()
@@ -45,6 +50,17 @@ export class LocationService {
             `Parent location with ID ${createLocationDto.parentId} not found`,
           );
         }
+
+        if (location.id === parent.id) {
+          throw new BadRequestException('A location cannot be its own parent.');
+        }
+
+        if (await this.isDescendant(location.id, parent.id)) {
+          throw new BadRequestException(
+            'A location cannot be its own ancestor.',
+          );
+        }
+
         location.parent = parent;
       }
 
@@ -61,6 +77,14 @@ export class LocationService {
       if (error instanceof NotFoundException) {
         throw error;
       }
+
+      if (error instanceof QueryFailedError) {
+        const queryError = error as QueryFailedError<PostgresError>;
+        if (queryError.driverError.code === '23505') {
+          throw new BadRequestException(`Location number must be unique.`);
+        }
+      }
+
       throw new BadRequestException(
         `Failed to create location: ${(error as Error).message}`,
       );
@@ -182,20 +206,31 @@ export class LocationService {
       this.logger.log(`Updating location with ID: ${id}`);
       const location = await this.findOne(id);
 
-      if (updateLocationDto.parentId !== undefined) {
-        if (updateLocationDto.parentId === null) {
-          location.parent = null;
-        } else {
-          const parent = await this.locationRepository.findOne({
-            where: { id: updateLocationDto.parentId },
-          });
-          if (!parent) {
-            throw new NotFoundException(
-              `Parent location with ID ${updateLocationDto.parentId} not found`,
-            );
-          }
-          location.parent = parent;
+      const { parentId } = updateLocationDto;
+
+      if (parentId) {
+        const parent = await this.locationRepository.findOne({
+          where: { id: parentId },
+        });
+        if (!parent) {
+          throw new NotFoundException(
+            `Parent location with ID ${parentId} not found`,
+          );
         }
+
+        if (location.id === parent.id) {
+          throw new BadRequestException('A location cannot be its own parent.');
+        }
+
+        if (await this.isDescendant(location.id, parent.id)) {
+          throw new BadRequestException(
+            'A location cannot be its own ancestor.',
+          );
+        }
+
+        location.parent = parent;
+      } else {
+        location.parent = null;
       }
 
       Object.assign(location, updateLocationDto);
@@ -245,5 +280,27 @@ export class LocationService {
         `Failed to remove location: ${(error as Error).message}`,
       );
     }
+  }
+
+  private async isDescendant(
+    locationId: number,
+    parentId: number,
+  ): Promise<boolean> {
+    const location = await this.locationRepository.findOne({
+      where: { id: locationId },
+      relations: ['children'],
+    });
+
+    if (!location || !location.children) {
+      return false;
+    }
+
+    const isChild = location.children.some((child) => child.id === parentId);
+
+    const hasDescendant = await Promise.all(
+      location.children.map((child) => this.isDescendant(child.id, parentId)),
+    );
+
+    return isChild || hasDescendant.includes(true);
   }
 }

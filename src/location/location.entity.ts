@@ -4,10 +4,12 @@ import {
   OneToMany,
   ManyToOne,
   PrimaryGeneratedColumn,
+  Unique,
 } from 'typeorm';
 import { ApiProperty } from '@nestjs/swagger';
 
 @Entity()
+@Unique('UQ_location_number', ['locationNumber'])
 export class Location {
   @ApiProperty({
     example: 1,
